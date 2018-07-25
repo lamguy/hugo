@@ -74,7 +74,7 @@ type Page interface {
 	IsRenderable() bool
 
 	// Metadata returns the unmarshalled frontmatter data.
-	Metadata() (interface{}, error)
+	Metadata() (map[string]interface{}, error)
 }
 
 // page implements the Page interface.
@@ -100,16 +100,13 @@ func (p *page) IsRenderable() bool {
 }
 
 // Metadata returns the unmarshalled frontmatter data.
-func (p *page) Metadata() (meta interface{}, err error) {
+func (p *page) Metadata() (meta map[string]interface{}, err error) {
 	frontmatter := p.FrontMatter()
 
 	if len(frontmatter) != 0 {
 		fm := DetectFrontMatter(rune(frontmatter[0]))
 		if fm != nil {
 			meta, err = fm.Parse(frontmatter)
-			if err != nil {
-				return
-			}
 		}
 	}
 	return
@@ -300,17 +297,18 @@ func determineDelims(firstLine []byte) (left, right []byte) {
 // function.
 func extractFrontMatterDelims(r *bufio.Reader, left, right []byte) (fm []byte, err error) {
 	var (
-		c         byte
-		buf       bytes.Buffer
-		level     int
-		sameDelim = bytes.Equal(left, right)
+		c           byte
+		buf         bytes.Buffer
+		level       int
+		sameDelim   = bytes.Equal(left, right)
+		inQuote     bool
+		escapeState int
 	)
-
 	// Frontmatter must start with a delimiter. To check it first,
 	// pre-reads beginning delimiter length - 1 bytes from Reader
 	for i := 0; i < len(left)-1; i++ {
 		if c, err = r.ReadByte(); err != nil {
-			return nil, fmt.Errorf("unable to read frontmatter at filepos %d: %s", buf.Len(), err)
+			return nil, fmt.Errorf("unable to read frontmatter at filepos %d: %s\n%.100s...", buf.Len(), err, buf.String())
 		}
 		if err = buf.WriteByte(c); err != nil {
 			return nil, err
@@ -325,13 +323,19 @@ func extractFrontMatterDelims(r *bufio.Reader, left, right []byte) (fm []byte, e
 	// is expected that the delimiter only contains one character.
 	for {
 		if c, err = r.ReadByte(); err != nil {
-			return nil, fmt.Errorf("unable to read frontmatter at filepos %d: %s", buf.Len(), err)
+			return nil, fmt.Errorf("unable to read frontmatter at filepos %d: %s\n%.100s...", buf.Len(), err, buf.String())
 		}
 		if err = buf.WriteByte(c); err != nil {
 			return nil, err
 		}
 
 		switch c {
+		case '"':
+			if escapeState != 1 {
+				inQuote = !inQuote
+			}
+		case '\\':
+			escapeState++
 		case left[len(left)-1]:
 			if sameDelim { // YAML, TOML case
 				if bytes.HasSuffix(buf.Bytes(), left) && (buf.Len() == len(left) || buf.Bytes()[buf.Len()-len(left)-1] == '\n') {
@@ -340,7 +344,7 @@ func extractFrontMatterDelims(r *bufio.Reader, left, right []byte) (fm []byte, e
 					if err != nil {
 						// It is ok that the end delimiter ends with EOF
 						if err != io.EOF || level != 1 {
-							return nil, fmt.Errorf("unable to read frontmatter at filepos %d: %s", buf.Len(), err)
+							return nil, fmt.Errorf("unable to read frontmatter at filepos %d: %s\n%.100s...", buf.Len(), err, buf.String())
 						}
 					} else {
 						switch c {
@@ -354,7 +358,7 @@ func extractFrontMatterDelims(r *bufio.Reader, left, right []byte) (fm []byte, e
 								return nil, err
 							}
 							if c, err = r.ReadByte(); err != nil {
-								return nil, fmt.Errorf("unable to read frontmatter at filepos %d: %s", buf.Len(), err)
+								return nil, fmt.Errorf("unable to read frontmatter at filepos %d: %s\n%.100s...", buf.Len(), err, buf.String())
 							}
 							if c != '\n' {
 								return nil, fmt.Errorf("frontmatter delimiter must be followed by CR+LF or LF but those can't be found at filepos %d", buf.Len())
@@ -373,10 +377,14 @@ func extractFrontMatterDelims(r *bufio.Reader, left, right []byte) (fm []byte, e
 					}
 				}
 			} else { // JSON case
-				level++
+				if !inQuote {
+					level++
+				}
 			}
 		case right[len(right)-1]: // JSON case only reaches here
-			level--
+			if !inQuote {
+				level--
+			}
 		}
 
 		if level == 0 {
@@ -390,6 +398,11 @@ func extractFrontMatterDelims(r *bufio.Reader, left, right []byte) (fm []byte, e
 
 			return buf.Bytes(), nil
 		}
+
+		if c != '\\' {
+			escapeState = 0
+		}
+
 	}
 }
 

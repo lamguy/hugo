@@ -15,12 +15,13 @@ package lang
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
 
+	"github.com/gohugoio/hugo/deps"
 	"github.com/spf13/cast"
-	"github.com/spf13/hugo/deps"
 )
 
 // New returns a new instance of the lang-namespaced template functions.
@@ -133,4 +134,16 @@ func (ns *Namespace) NumFmt(precision, number interface{}, options ...interface{
 	}
 
 	return string(b), nil
+}
+
+type pagesLanguageMerger interface {
+	MergeByLanguageInterface(other interface{}) (interface{}, error)
+}
+
+func (ns *Namespace) Merge(p2, p1 interface{}) (interface{}, error) {
+	merger, ok := p1.(pagesLanguageMerger)
+	if !ok {
+		return nil, fmt.Errorf("language merge not supported for %T", p1)
+	}
+	return merger.MergeByLanguageInterface(p2)
 }

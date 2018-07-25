@@ -23,11 +23,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gohugoio/hugo/config"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/helpers"
+	"github.com/gohugoio/hugo/hugofs"
+	"github.com/gohugoio/hugo/langs"
 	"github.com/spf13/afero"
-	"github.com/spf13/hugo/config"
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/helpers"
-	"github.com/spf13/hugo/hugofs"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,7 +128,7 @@ func TestScpGetRemote(t *testing.T) {
 func TestScpGetRemoteParallel(t *testing.T) {
 	t.Parallel()
 
-	ns := New(newDeps(viper.New()))
+	ns := newTestNs()
 
 	content := []byte(`T€st Content 123`)
 	srv, cl := getTestServer(func(w http.ResponseWriter, r *http.Request) {
@@ -164,11 +165,21 @@ func TestScpGetRemoteParallel(t *testing.T) {
 }
 
 func newDeps(cfg config.Provider) *deps.Deps {
-	l := helpers.NewLanguage("en", cfg)
+	l := langs.NewLanguage("en", cfg)
 	l.Set("i18nDir", "i18n")
+	cs, err := helpers.NewContentSpec(l)
+	if err != nil {
+		panic(err)
+	}
 	return &deps.Deps{
 		Cfg:         cfg,
 		Fs:          hugofs.NewMem(l),
-		ContentSpec: helpers.NewContentSpec(l),
+		ContentSpec: cs,
 	}
+}
+
+func newTestNs() *Namespace {
+	v := viper.New()
+	v.Set("contentDir", "content")
+	return New(newDeps(v))
 }

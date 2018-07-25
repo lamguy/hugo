@@ -25,12 +25,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gohugoio/hugo/langs"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/gohugoio/hugo/hugofs"
 	"github.com/spf13/afero"
-	"github.com/spf13/hugo/hugofs"
 	"github.com/spf13/viper"
 )
 
@@ -56,10 +58,12 @@ func TestMakePath(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		v := viper.New()
-		l := NewDefaultLanguage(v)
+		v := newTestCfg()
 		v.Set("removePathAccents", test.removeAccents)
-		p, _ := NewPathSpec(hugofs.NewMem(v), l)
+
+		l := langs.NewDefaultLanguage(v)
+		p, err := NewPathSpec(hugofs.NewMem(v), l)
+		require.NoError(t, err)
 
 		output := p.MakePath(test.input)
 		if output != test.expected {
@@ -70,7 +74,16 @@ func TestMakePath(t *testing.T) {
 
 func TestMakePathSanitized(t *testing.T) {
 	v := viper.New()
-	l := NewDefaultLanguage(v)
+	v.Set("contentDir", "content")
+	v.Set("dataDir", "data")
+	v.Set("i18nDir", "i18n")
+	v.Set("layoutDir", "layouts")
+	v.Set("assetDir", "assets")
+	v.Set("resourceDir", "resources")
+	v.Set("publishDir", "public")
+	v.Set("archetypeDir", "archetypes")
+
+	l := langs.NewDefaultLanguage(v)
 	p, _ := NewPathSpec(hugofs.NewMem(v), l)
 
 	tests := []struct {
@@ -94,11 +107,11 @@ func TestMakePathSanitized(t *testing.T) {
 }
 
 func TestMakePathSanitizedDisablePathToLower(t *testing.T) {
-	v := viper.New()
+	v := newTestCfg()
 
 	v.Set("disablePathToLower", true)
 
-	l := NewDefaultLanguage(v)
+	l := langs.NewDefaultLanguage(v)
 	p, _ := NewPathSpec(hugofs.NewMem(v), l)
 
 	tests := []struct {
@@ -465,6 +478,7 @@ func createTempDirWithNonZeroLengthFiles() (string, error) {
 		return "", fileErr
 	}
 	byteString := []byte("byteString")
+
 	fileErr = ioutil.WriteFile(f.Name(), byteString, 0644)
 	if fileErr != nil {
 		// delete the file
@@ -575,6 +589,11 @@ func TestAbsPathify(t *testing.T) {
 
 }
 
+func TestExtNoDelimiter(t *testing.T) {
+	assert := require.New(t)
+	assert.Equal("json", ExtNoDelimiter(filepath.FromSlash("/my/data.json")))
+}
+
 func TestFilename(t *testing.T) {
 	type test struct {
 		input, expected string
@@ -637,40 +656,6 @@ func TestFileAndExt(t *testing.T) {
 
 }
 
-func TestGuessSection(t *testing.T) {
-	type test struct {
-		input, expected string
-	}
-
-	data := []test{
-		{"/", ""},
-		{"", ""},
-		{"/content", ""},
-		{"content/", ""},
-		{"/content/", ""}, // /content/ is a special case. It will never be the section
-		{"/blog", ""},
-		{"/blog/", "blog"},
-		{"blog", ""},
-		{"content/blog", ""},
-		{"/content/blog/", "blog"},
-		{"/content/blog", ""}, // Lack of trailing slash indicates 'blog' is not a directory.
-		{"content/blog/", "blog"},
-		{"/contents/myblog/", "contents"},
-		{"/contents/yourblog", "contents"},
-		{"/contents/ourblog/", "contents"},
-		{"/content/myblog/", "myblog"},
-		{"/content/yourblog", ""},
-		{"/content/ourblog/", "ourblog"},
-	}
-
-	for i, d := range data {
-		expected := GuessSection(filepath.FromSlash(d.input))
-		if d.expected != expected {
-			t.Errorf("Test %d failed. Expected %q got %q", i, d.expected, expected)
-		}
-	}
-}
-
 func TestPathPrep(t *testing.T) {
 
 }
@@ -703,10 +688,10 @@ func TestFindCWD(t *testing.T) {
 
 	//cwd, _ := os.Getwd()
 	data := []test{
-	//{cwd, nil},
-	// Commenting this out. It doesn't work properly.
-	// There's a good reason why we don't use os.Getwd(), it doesn't actually work the way we want it to.
-	// I really don't know a better way to test this function. - SPF 2014.11.04
+		//{cwd, nil},
+		// Commenting this out. It doesn't work properly.
+		// There's a good reason why we don't use os.Getwd(), it doesn't actually work the way we want it to.
+		// I really don't know a better way to test this function. - SPF 2014.11.04
 	}
 	for i, d := range data {
 		dir, err := FindCWD()

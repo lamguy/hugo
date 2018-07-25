@@ -25,10 +25,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/hugo/config"
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/helpers"
-	"github.com/spf13/hugo/hugofs"
+	"github.com/gohugoio/hugo/config"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/helpers"
+	"github.com/gohugoio/hugo/hugofs"
+	"github.com/gohugoio/hugo/langs"
 	jww "github.com/spf13/jwalterweatherman"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -48,12 +49,13 @@ func TestAfter(t *testing.T) {
 		expect interface{}
 	}{
 		{int(2), []string{"a", "b", "c", "d"}, []string{"c", "d"}},
-		{int32(3), []string{"a", "b"}, false},
+		{int32(3), []string{"a", "b"}, []string{}},
 		{int64(2), []int{100, 200, 300}, []int{300}},
-		{100, []int{100, 200}, false},
+		{100, []int{100, 200}, []int{}},
 		{"1", []int{100, 200, 300}, []int{200, 300}},
 		{int64(-1), []int{100, 200, 300}, false},
 		{"noint", []int{100, 200, 300}, false},
+		{2, []string{}, []string{}},
 		{1, nil, false},
 		{nil, []int{100}, false},
 		{1, t, false},
@@ -69,7 +71,7 @@ func TestAfter(t *testing.T) {
 		}
 
 		require.NoError(t, err, errMsg)
-		assert.Equal(t, test.expect, result, errMsg)
+		require.Equal(t, test.expect, result, errMsg)
 	}
 }
 
@@ -244,10 +246,13 @@ func TestIn(t *testing.T) {
 		{[]int{1, 2, 4}, 3, false},
 		{[]float64{1.23, 2.45, 4.67}, 1.23, true},
 		{[]float64{1.234567, 2.45, 4.67}, 1.234568, false},
+		{[]float64{1, 2, 3}, 1, true},
+		{[]float32{1, 2, 3}, 1, true},
 		{"this substring should be found", "substring", true},
 		{"this substring should not be found", "subseastring", false},
 		{nil, "foo", false},
 	} {
+
 		errMsg := fmt.Sprintf("[%d] %v", i, test)
 
 		result := ns.In(test.l1, test.l2)
@@ -255,10 +260,33 @@ func TestIn(t *testing.T) {
 	}
 }
 
+type page struct {
+	Title string
+}
+
+func (p page) String() string {
+	return "p-" + p.Title
+}
+
+type pagesPtr []*page
+type pagesVals []page
+
 func TestIntersect(t *testing.T) {
 	t.Parallel()
 
 	ns := New(&deps.Deps{})
+
+	var (
+		p1 = &page{"A"}
+		p2 = &page{"B"}
+		p3 = &page{"C"}
+		p4 = &page{"D"}
+
+		p1v = page{"A"}
+		p2v = page{"B"}
+		p3v = page{"C"}
+		p4v = page{"D"}
+	)
 
 	for i, test := range []struct {
 		l1, l2 interface{}
@@ -277,6 +305,7 @@ func TestIntersect(t *testing.T) {
 		{[]int{2, 4}, []int{1, 2, 4}, []int{2, 4}},
 		{[]int{1, 2, 4}, []int{3, 6}, []int{}},
 		{[]float64{2.2, 4.4}, []float64{1.1, 2.2, 4.4}, []float64{2.2, 4.4}},
+
 		// errors
 		{"not array or slice", []string{"a"}, false},
 		{[]string{"a"}, "not array or slice", false},
@@ -298,6 +327,7 @@ func TestIntersect(t *testing.T) {
 		{[]interface{}{int16(1), int16(2), int16(3)}, []int16{1, 2, 2}, []interface{}{int16(1), int16(2)}},
 		{[]interface{}{int32(1), int32(2), int32(3)}, []int32{1, 2, 2}, []interface{}{int32(1), int32(2)}},
 		{[]interface{}{int64(1), int64(2), int64(3)}, []int64{1, 2, 2}, []interface{}{int64(1), int64(2)}},
+		{[]interface{}{uint(1), uint(2), uint(3)}, []uint{1, 2, 2}, []interface{}{uint(1), uint(2)}},
 		{[]interface{}{float32(1), float32(2), float32(3)}, []float32{1, 2, 2}, []interface{}{float32(1), float32(2)}},
 		{[]interface{}{float64(1), float64(2), float64(3)}, []float64{1, 2, 2}, []interface{}{float64(1), float64(2)}},
 
@@ -310,8 +340,19 @@ func TestIntersect(t *testing.T) {
 		{[]int64{1, 2, 3}, []interface{}{int64(1), int64(2), int64(2)}, []int64{1, 2}},
 		{[]float32{1, 2, 3}, []interface{}{float32(1), float32(2), float32(2)}, []float32{1, 2}},
 		{[]float64{1, 2, 3}, []interface{}{float64(1), float64(2), float64(2)}, []float64{1, 2}},
+
+		// Structs
+		{pagesPtr{p1, p4, p2, p3}, pagesPtr{p4, p2, p2}, pagesPtr{p4, p2}},
+		{pagesVals{p1v, p4v, p2v, p3v}, pagesVals{p1v, p3v, p3v}, pagesVals{p1v, p3v}},
+		{[]interface{}{p1, p4, p2, p3}, []interface{}{p4, p2, p2}, []interface{}{p4, p2}},
+		{[]interface{}{p1v, p4v, p2v, p3v}, []interface{}{p1v, p3v, p3v}, []interface{}{p1v, p3v}},
+		{pagesPtr{p1, p4, p2, p3}, pagesPtr{}, pagesPtr{}},
+		{pagesVals{}, pagesVals{p1v, p3v, p3v}, pagesVals{}},
+		{[]interface{}{p1, p4, p2, p3}, []interface{}{}, []interface{}{}},
+		{[]interface{}{}, []interface{}{p1v, p3v, p3v}, []interface{}{}},
 	} {
-		errMsg := fmt.Sprintf("[%d] %v", i, test)
+
+		errMsg := fmt.Sprintf("[%d]", test)
 
 		result, err := ns.Intersect(test.l1, test.l2)
 
@@ -321,14 +362,16 @@ func TestIntersect(t *testing.T) {
 		}
 
 		assert.NoError(t, err, errMsg)
-		assert.Equal(t, test.expect, result, errMsg)
+		if !reflect.DeepEqual(result, test.expect) {
+			t.Fatalf("[%d] Got\n%v expected\n%v", i, result, test.expect)
+		}
 	}
 }
 
 func TestIsSet(t *testing.T) {
 	t.Parallel()
 
-	ns := New(newDeps(viper.New()))
+	ns := newTestNs()
 
 	for i, test := range []struct {
 		a      interface{}
@@ -565,31 +608,83 @@ func TestUnion(t *testing.T) {
 
 	ns := New(&deps.Deps{})
 
+	var (
+		p1 = &page{"A"}
+		p2 = &page{"B"}
+		//		p3 = &page{"C"}
+		p4 = &page{"D"}
+
+		p1v = page{"A"}
+		//p2v = page{"B"}
+		p3v = page{"C"}
+		//p4v = page{"D"}
+	)
+
 	for i, test := range []struct {
 		l1     interface{}
 		l2     interface{}
 		expect interface{}
 		isErr  bool
 	}{
+		{nil, nil, []interface{}{}, false},
+		{nil, []string{"a", "b"}, []string{"a", "b"}, false},
+		{[]string{"a", "b"}, nil, []string{"a", "b"}, false},
+
+		// []A ∪ []B
+		{[]string{"1", "2"}, []int{3}, []string{}, false},
+		{[]int{1, 2}, []string{"1", "2"}, []int{}, false},
+
+		// []T ∪ []T
 		{[]string{"a", "b", "c", "c"}, []string{"a", "b", "b"}, []string{"a", "b", "c"}, false},
 		{[]string{"a", "b"}, []string{"a", "b", "c"}, []string{"a", "b", "c"}, false},
 		{[]string{"a", "b", "c"}, []string{"d", "e"}, []string{"a", "b", "c", "d", "e"}, false},
 		{[]string{}, []string{}, []string{}, false},
-		{[]string{"a", "b"}, nil, []string{"a", "b"}, false},
-		{nil, []string{"a", "b"}, []string{"a", "b"}, false},
-		{nil, nil, make([]interface{}, 0), true},
-		{[]string{"1", "2"}, []int{1, 2}, make([]string, 0), false},
-		{[]int{1, 2}, []string{"1", "2"}, make([]int, 0), false},
 		{[]int{1, 2, 3}, []int{3, 4, 5}, []int{1, 2, 3, 4, 5}, false},
 		{[]int{1, 2, 3}, []int{1, 2, 3}, []int{1, 2, 3}, false},
 		{[]int{1, 2, 4}, []int{2, 4}, []int{1, 2, 4}, false},
 		{[]int{2, 4}, []int{1, 2, 4}, []int{2, 4, 1}, false},
 		{[]int{1, 2, 4}, []int{3, 6}, []int{1, 2, 4, 3, 6}, false},
 		{[]float64{2.2, 4.4}, []float64{1.1, 2.2, 4.4}, []float64{2.2, 4.4, 1.1}, false},
+		{[]interface{}{"a", "b", "c", "c"}, []interface{}{"a", "b", "b"}, []interface{}{"a", "b", "c"}, false},
+
+		// []T ∪ []interface{}
+		{[]string{"1", "2"}, []interface{}{"9"}, []string{"1", "2", "9"}, false},
+		{[]int{2, 4}, []interface{}{1, 2, 4}, []int{2, 4, 1}, false},
+		{[]int8{2, 4}, []interface{}{int8(1), int8(2), int8(4)}, []int8{2, 4, 1}, false},
+		{[]int8{2, 4}, []interface{}{1, 2, 4}, []int8{2, 4, 1}, false},
+		{[]int16{2, 4}, []interface{}{1, 2, 4}, []int16{2, 4, 1}, false},
+		{[]int32{2, 4}, []interface{}{1, 2, 4}, []int32{2, 4, 1}, false},
+		{[]int64{2, 4}, []interface{}{1, 2, 4}, []int64{2, 4, 1}, false},
+
+		{[]float64{2.2, 4.4}, []interface{}{1.1, 2.2, 4.4}, []float64{2.2, 4.4, 1.1}, false},
+		{[]float32{2.2, 4.4}, []interface{}{1.1, 2.2, 4.4}, []float32{2.2, 4.4, 1.1}, false},
+
+		// []interface{} ∪ []T
+		{[]interface{}{"a", "b", "c", "c"}, []string{"a", "b", "d"}, []interface{}{"a", "b", "c", "d"}, false},
+		{[]interface{}{}, []string{}, []interface{}{}, false},
+		{[]interface{}{1, 2}, []int{2, 3}, []interface{}{1, 2, 3}, false},
+		{[]interface{}{1, 2}, []int8{2, 3}, []interface{}{1, 2, 3}, false}, // 28
+		{[]interface{}{uint(1), uint(2)}, []uint{2, 3}, []interface{}{uint(1), uint(2), uint(3)}, false},
+		{[]interface{}{1.1, 2.2}, []float64{2.2, 3.3}, []interface{}{1.1, 2.2, 3.3}, false},
+
+		// Structs
+		{pagesPtr{p1, p4}, pagesPtr{p4, p2, p2}, pagesPtr{p1, p4, p2}, false},
+		{pagesVals{p1v}, pagesVals{p3v, p3v}, pagesVals{p1v, p3v}, false},
+		{[]interface{}{p1, p4}, []interface{}{p4, p2, p2}, []interface{}{p1, p4, p2}, false},
+		{[]interface{}{p1v}, []interface{}{p3v, p3v}, []interface{}{p1v, p3v}, false},
+		// #3686
+		{[]interface{}{p1v}, []interface{}{}, []interface{}{p1v}, false},
+		{[]interface{}{}, []interface{}{p1v}, []interface{}{p1v}, false},
+		{pagesPtr{p1}, pagesPtr{}, pagesPtr{p1}, false},
+		{pagesVals{p1v}, pagesVals{}, pagesVals{p1v}, false},
+		{pagesPtr{}, pagesPtr{p1}, pagesPtr{p1}, false},
+		{pagesVals{}, pagesVals{p1v}, pagesVals{p1v}, false},
+
 		// errors
 		{"not array or slice", []string{"a"}, false, true},
 		{[]string{"a"}, "not array or slice", false, true},
 	} {
+
 		errMsg := fmt.Sprintf("[%d] %v", i, test)
 
 		result, err := ns.Union(test.l1, test.l2)
@@ -599,7 +694,9 @@ func TestUnion(t *testing.T) {
 		}
 
 		assert.NoError(t, err, errMsg)
-		assert.Equal(t, test.expect, result, errMsg)
+		if !reflect.DeepEqual(result, test.expect) {
+			t.Fatalf("[%d] Got\n%v expected\n%v", i, result, test.expect)
+		}
 	}
 }
 
@@ -679,12 +776,22 @@ type TstX struct {
 }
 
 func newDeps(cfg config.Provider) *deps.Deps {
-	l := helpers.NewLanguage("en", cfg)
+	l := langs.NewLanguage("en", cfg)
 	l.Set("i18nDir", "i18n")
+	cs, err := helpers.NewContentSpec(l)
+	if err != nil {
+		panic(err)
+	}
 	return &deps.Deps{
 		Cfg:         cfg,
 		Fs:          hugofs.NewMem(l),
-		ContentSpec: helpers.NewContentSpec(l),
+		ContentSpec: cs,
 		Log:         jww.NewNotepad(jww.LevelError, jww.LevelError, os.Stdout, ioutil.Discard, "", log.Ldate|log.Ltime),
 	}
+}
+
+func newTestNs() *Namespace {
+	v := viper.New()
+	v.Set("contentDir", "content")
+	return New(newDeps(v))
 }

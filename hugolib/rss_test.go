@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/hugo/deps"
+	"github.com/gohugoio/hugo/deps"
 )
 
 func TestRSSOutput(t *testing.T) {
@@ -38,7 +38,7 @@ func TestRSSOutput(t *testing.T) {
 	cfg.Set("rssLimit", rssLimit)
 
 	for _, src := range weightedSources {
-		writeSource(t, fs, filepath.Join("content", "sect", src.Name), string(src.Content))
+		writeSource(t, fs, filepath.Join("content", "sect", src[0]), src[1])
 	}
 
 	buildSingleSite(t, deps.DepsCfg{Fs: fs, Cfg: cfg}, BuildCfg{})

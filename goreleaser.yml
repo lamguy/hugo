@@ -1,7 +1,9 @@
 build:
   main: main.go
   binary: hugo
-  ldflags: -s -w -X hugolib.BuildDate={{.Date}}
+  ldflags: -s -w -X github.com/gohugoio/hugo/hugolib.BuildDate={{.Date}}
+  env:
+    - CGO_ENABLED=0
   goos:
     - darwin
     - linux
@@ -15,6 +17,11 @@ build:
     - 386
     - arm
     - arm64
+  ignore:
+    - goos: openbsd
+      goarch: arm
+      goarm: 6
+
 fpm:
   formats:
       - deb
@@ -43,6 +50,6 @@ archive:
     dragonfly: DragonFlyBSD
   files:
     - README.md
-    - LICENSE.md
+    - LICENSE
 release:
   draft: true

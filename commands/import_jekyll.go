@@ -25,43 +25,52 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gohugoio/hugo/helpers"
+	"github.com/gohugoio/hugo/hugofs"
+	"github.com/gohugoio/hugo/hugolib"
+	"github.com/gohugoio/hugo/parser"
 	"github.com/spf13/afero"
 	"github.com/spf13/cast"
 	"github.com/spf13/cobra"
-	"github.com/spf13/hugo/helpers"
-	"github.com/spf13/hugo/hugofs"
-	"github.com/spf13/hugo/hugolib"
-	"github.com/spf13/hugo/parser"
 	jww "github.com/spf13/jwalterweatherman"
 )
 
-func init() {
-	importCmd.AddCommand(importJekyllCmd)
+var _ cmder = (*importCmd)(nil)
+
+type importCmd struct {
+	*baseCmd
 }
 
-var importCmd = &cobra.Command{
-	Use:   "import",
-	Short: "Import your site from others.",
-	Long: `Import your site from other web site generators like Jekyll.
+func newImportCmd() *importCmd {
+	cc := &importCmd{}
+
+	cc.baseCmd = newBaseCmd(&cobra.Command{
+		Use:   "import",
+		Short: "Import your site from others.",
+		Long: `Import your site from other web site generators like Jekyll.
 
 Import requires a subcommand, e.g. ` + "`hugo import jekyll jekyll_root_path target_path`.",
-	RunE: nil,
-}
+		RunE: nil,
+	})
 
-var importJekyllCmd = &cobra.Command{
-	Use:   "jekyll",
-	Short: "hugo import from Jekyll",
-	Long: `hugo import from Jekyll.
+	importJekyllCmd := &cobra.Command{
+		Use:   "jekyll",
+		Short: "hugo import from Jekyll",
+		Long: `hugo import from Jekyll.
 
 Import from Jekyll requires two paths, e.g. ` + "`hugo import jekyll jekyll_root_path target_path`.",
-	RunE: importFromJekyll,
-}
+		RunE: cc.importFromJekyll,
+	}
 
-func init() {
 	importJekyllCmd.Flags().Bool("force", false, "allow import into non-empty target directory")
+
+	cc.cmd.AddCommand(importJekyllCmd)
+
+	return cc
+
 }
 
-func importFromJekyll(cmd *cobra.Command, args []string) error {
+func (i *importCmd) importFromJekyll(cmd *cobra.Command, args []string) error {
 
 	if len(args) < 2 {
 		return newUserError(`Import from Jekyll requires two paths, e.g. ` + "`hugo import jekyll jekyll_root_path target_path`.")
@@ -84,9 +93,17 @@ func importFromJekyll(cmd *cobra.Command, args []string) error {
 	}
 
 	forceImport, _ := cmd.Flags().GetBool("force")
-	site, err := createSiteFromJekyll(jekyllRoot, targetDir, forceImport)
+
+	fs := afero.NewOsFs()
+	jekyllPostDirs, hasAnyPost := i.getJekyllDirInfo(fs, jekyllRoot)
+	if !hasAnyPost {
+		return errors.New("Your Jekyll root contains neither posts nor drafts, aborting.")
+	}
+
+	site, err := i.createSiteFromJekyll(jekyllRoot, targetDir, jekyllPostDirs, forceImport)
+
 	if err != nil {
-		return err
+		return newUserError(err)
 	}
 
 	jww.FEEDBACK.Println("Importing...")
@@ -110,10 +127,10 @@ func importFromJekyll(cmd *cobra.Command, args []string) error {
 		draft := false
 
 		switch {
-		case strings.HasPrefix(relPath, "_posts/"):
-			relPath = "content/post" + relPath[len("_posts"):]
-		case strings.HasPrefix(relPath, "_drafts/"):
-			relPath = "content/draft" + relPath[len("_drafts"):]
+		case strings.Contains(relPath, "_posts/"):
+			relPath = filepath.Join("content/post", strings.Replace(relPath, "_posts/", "", -1))
+		case strings.Contains(relPath, "_drafts/"):
+			relPath = filepath.Join("content/draft", strings.Replace(relPath, "_drafts/", "", -1))
 			draft = true
 		default:
 			return nil
@@ -123,11 +140,14 @@ func importFromJekyll(cmd *cobra.Command, args []string) error {
 		return convertJekyllPost(site, path, relPath, targetDir, draft)
 	}
 
-	err = helpers.SymbolicWalk(hugofs.Os, jekyllRoot, callback)
-
-	if err != nil {
-		return err
+	for jekyllPostDir, hasAnyPostInDir := range jekyllPostDirs {
+		if hasAnyPostInDir {
+			if err = helpers.SymbolicWalk(hugofs.Os, filepath.Join(jekyllRoot, jekyllPostDir), callback); err != nil {
+				return err
+			}
+		}
 	}
+
 	jww.FEEDBACK.Println("Congratulations!", fileCount, "post(s) imported!")
 	jww.FEEDBACK.Println("Now, start Hugo by yourself:\n" +
 		"$ git clone https://github.com/spf13/herring-cove.git " + args[1] + "/themes/herring-cove")
@@ -136,15 +156,52 @@ func importFromJekyll(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// TODO: Consider calling doNewSite() instead?
-func createSiteFromJekyll(jekyllRoot, targetDir string, force bool) (*hugolib.Site, error) {
+func (i *importCmd) getJekyllDirInfo(fs afero.Fs, jekyllRoot string) (map[string]bool, bool) {
+	postDirs := make(map[string]bool)
+	hasAnyPost := false
+	if entries, err := ioutil.ReadDir(jekyllRoot); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				subDir := filepath.Join(jekyllRoot, entry.Name())
+				if isPostDir, hasAnyPostInDir := i.retrieveJekyllPostDir(fs, subDir); isPostDir {
+					postDirs[entry.Name()] = hasAnyPostInDir
+					if hasAnyPostInDir {
+						hasAnyPost = true
+					}
+				}
+			}
+		}
+	}
+	return postDirs, hasAnyPost
+}
+
+func (i *importCmd) retrieveJekyllPostDir(fs afero.Fs, dir string) (bool, bool) {
+	if strings.HasSuffix(dir, "_posts") || strings.HasSuffix(dir, "_drafts") {
+		isEmpty, _ := helpers.IsEmpty(dir, fs)
+		return true, !isEmpty
+	}
+
+	if entries, err := ioutil.ReadDir(dir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				subDir := filepath.Join(dir, entry.Name())
+				if isPostDir, hasAnyPost := i.retrieveJekyllPostDir(fs, subDir); isPostDir {
+					return isPostDir, hasAnyPost
+				}
+			}
+		}
+	}
+
+	return false, true
+}
+
+func (i *importCmd) createSiteFromJekyll(jekyllRoot, targetDir string, jekyllPostDirs map[string]bool, force bool) (*hugolib.Site, error) {
 	s, err := hugolib.NewSiteDefaultLang()
 	if err != nil {
 		return nil, err
 	}
 
 	fs := s.Fs.Source
-
 	if exists, _ := helpers.Exists(targetDir, fs); exists {
 		if isDir, _ := helpers.IsDir(targetDir, fs); !isDir {
 			return nil, errors.New("Target path \"" + targetDir + "\" already exists but not a directory")
@@ -157,25 +214,7 @@ func createSiteFromJekyll(jekyllRoot, targetDir string, force bool) (*hugolib.Si
 		}
 	}
 
-	jekyllConfig := loadJekyllConfig(fs, jekyllRoot)
-
-	// Crude test to make sure at least one of _drafts/ and _posts/ exists
-	// and is not empty.
-	hasPostsOrDrafts := false
-	postsDir := filepath.Join(jekyllRoot, "_posts")
-	draftsDir := filepath.Join(jekyllRoot, "_drafts")
-	for _, d := range []string{postsDir, draftsDir} {
-		if exists, _ := helpers.Exists(d, fs); exists {
-			if isDir, _ := helpers.IsDir(d, fs); isDir {
-				if isEmpty, _ := helpers.IsEmpty(d, fs); !isEmpty {
-					hasPostsOrDrafts = true
-				}
-			}
-		}
-	}
-	if !hasPostsOrDrafts {
-		return nil, errors.New("Your Jekyll root contains neither posts nor drafts, aborting.")
-	}
+	jekyllConfig := i.loadJekyllConfig(fs, jekyllRoot)
 
 	mkdir(targetDir, "layouts")
 	mkdir(targetDir, "content")
@@ -184,14 +223,14 @@ func createSiteFromJekyll(jekyllRoot, targetDir string, force bool) (*hugolib.Si
 	mkdir(targetDir, "data")
 	mkdir(targetDir, "themes")
 
-	createConfigFromJekyll(fs, targetDir, "yaml", jekyllConfig)
+	i.createConfigFromJekyll(fs, targetDir, "yaml", jekyllConfig)
 
-	copyJekyllFilesAndFolders(jekyllRoot, filepath.Join(targetDir, "static"))
+	i.copyJekyllFilesAndFolders(jekyllRoot, filepath.Join(targetDir, "static"), jekyllPostDirs)
 
 	return s, nil
 }
 
-func loadJekyllConfig(fs afero.Fs, jekyllRoot string) map[string]interface{} {
+func (i *importCmd) loadJekyllConfig(fs afero.Fs, jekyllRoot string) map[string]interface{} {
 	path := filepath.Join(jekyllRoot, "_config.yml")
 
 	exists, err := helpers.Exists(path, fs)
@@ -220,10 +259,10 @@ func loadJekyllConfig(fs afero.Fs, jekyllRoot string) map[string]interface{} {
 		return nil
 	}
 
-	return c.(map[string]interface{})
+	return c
 }
 
-func createConfigFromJekyll(fs afero.Fs, inpath string, kind string, jekyllConfig map[string]interface{}) (err error) {
+func (i *importCmd) createConfigFromJekyll(fs afero.Fs, inpath string, kind string, jekyllConfig map[string]interface{}) (err error) {
 	title := "My New Hugo Site"
 	baseURL := "http://example.org/"
 
@@ -318,7 +357,7 @@ func copyDir(source string, dest string) error {
 	return nil
 }
 
-func copyJekyllFilesAndFolders(jekyllRoot string, dest string) error {
+func (i *importCmd) copyJekyllFilesAndFolders(jekyllRoot, dest string, jekyllPostDirs map[string]bool) (err error) {
 	fi, err := os.Stat(jekyllRoot)
 	if err != nil {
 		return err
@@ -336,9 +375,11 @@ func copyJekyllFilesAndFolders(jekyllRoot string, dest string) error {
 		dfp := filepath.Join(dest, entry.Name())
 		if entry.IsDir() {
 			if entry.Name()[0] != '_' && entry.Name()[0] != '.' {
-				err = copyDir(sfp, dfp)
-				if err != nil {
-					jww.ERROR.Println(err)
+				if _, ok := jekyllPostDirs[entry.Name()]; !ok {
+					err = copyDir(sfp, dfp)
+					if err != nil {
+						jww.ERROR.Println(err)
+					}
 				}
 			}
 		} else {
@@ -431,7 +472,6 @@ func convertJekyllPost(s *hugolib.Site, path, relPath, targetDir string, draft b
 		return err
 	}
 
-	page.SetDir(targetParentDir)
 	page.SetSourceContent([]byte(content))
 	page.SetSourceMetaData(newmetadata, parser.FormatToLeadRune("yaml"))
 	page.SaveSourceAs(targetFile)
@@ -442,8 +482,6 @@ func convertJekyllPost(s *hugolib.Site, path, relPath, targetDir string, draft b
 }
 
 func convertJekyllMetaData(m interface{}, postName string, postDate time.Time, draft bool) (interface{}, error) {
-	url := postDate.Format("/2006/01/02/") + postName + "/"
-
 	metadata, err := cast.ToStringMapE(m)
 	if err != nil {
 		return nil, err
@@ -461,7 +499,7 @@ func convertJekyllMetaData(m interface{}, postName string, postDate time.Time, d
 			delete(metadata, key)
 		case "permalink":
 			if str, ok := value.(string); ok {
-				url = str
+				metadata["url"] = str
 			}
 			delete(metadata, key)
 		case "category":
@@ -490,7 +528,6 @@ func convertJekyllMetaData(m interface{}, postName string, postDate time.Time, d
 
 	}
 
-	metadata["url"] = url
 	metadata["date"] = postDate.Format(time.RFC3339)
 
 	return metadata, nil

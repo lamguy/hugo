@@ -15,13 +15,15 @@ package tpl
 
 import (
 	"io"
+	"time"
 
 	"text/template/parse"
 
 	"html/template"
 	texttemplate "text/template"
 
-	bp "github.com/spf13/hugo/bufferpool"
+	bp "github.com/gohugoio/hugo/bufferpool"
+	"github.com/gohugoio/hugo/metrics"
 )
 
 var (
@@ -33,8 +35,10 @@ type TemplateHandler interface {
 	TemplateFinder
 	AddTemplate(name, tpl string) error
 	AddLateTemplate(name, tpl string) error
-	LoadTemplates(absPath, prefix string)
+	LoadTemplates(prefix string)
 	PrintErrors()
+
+	NewTextTemplate() TemplateParseFinder
 
 	MarkReady()
 	RebuildClone()
@@ -42,13 +46,24 @@ type TemplateHandler interface {
 
 // TemplateFinder finds templates.
 type TemplateFinder interface {
-	Lookup(name string) *TemplateAdapter
+	Lookup(name string) (Template, bool)
 }
 
 // Template is the common interface between text/template and html/template.
 type Template interface {
 	Execute(wr io.Writer, data interface{}) error
 	Name() string
+}
+
+// TemplateParser is used to parse ad-hoc templates, e.g. in the Resource chain.
+type TemplateParser interface {
+	Parse(name, tpl string) (Template, error)
+}
+
+// TemplateParseFinder provides both parsing and finding.
+type TemplateParseFinder interface {
+	TemplateParser
+	TemplateFinder
 }
 
 // TemplateExecutor adds some extras to Template.
@@ -66,6 +81,17 @@ type TemplateDebugger interface {
 // TemplateAdapter implements the TemplateExecutor interface.
 type TemplateAdapter struct {
 	Template
+	Metrics metrics.Provider
+}
+
+// Execute executes the current template. The actual execution is performed
+// by the embedded text or html template, but we add an implementation here so
+// we can add a timer for some metrics.
+func (t *TemplateAdapter) Execute(w io.Writer, data interface{}) error {
+	if t.Metrics != nil {
+		defer t.Metrics.MeasureSince(t.Name(), time.Now())
+	}
+	return t.Template.Execute(w, data)
 }
 
 // ExecuteToString executes the current template and returns the result as a
@@ -101,6 +127,7 @@ func (t *TemplateAdapter) Tree() string {
 	return s
 }
 
+// TemplateFuncsGetter allows to get a map of functions.
 type TemplateFuncsGetter interface {
 	GetFuncs() map[string]interface{}
 }

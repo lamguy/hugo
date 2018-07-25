@@ -14,8 +14,8 @@
 package collections
 
 import (
-	"github.com/spf13/hugo/deps"
-	"github.com/spf13/hugo/tpl/internal"
+	"github.com/gohugoio/hugo/deps"
+	"github.com/gohugoio/hugo/tpl/internal"
 )
 
 const name = "collections"
@@ -61,6 +61,13 @@ func init() {
 		ns.AddMethodMapping(ctx.First,
 			[]string{"first"},
 			[][2]string{},
+		)
+
+		ns.AddMethodMapping(ctx.KeyVals,
+			[]string{"keyVals"},
+			[][2]string{
+				{`{{ keyVals "key" "a" "b" }}`, `key: [a b]`},
+			},
 		)
 
 		ns.AddMethodMapping(ctx.In,
@@ -137,6 +144,14 @@ func init() {
 				{`{{ seq 3 }}`, `[1 2 3]`},
 			},
 		)
+
+		ns.AddMethodMapping(ctx.NewScratch,
+			[]string{"newScratch"},
+			[][2]string{
+				{`{{ $scratch := newScratch }}{{ $scratch.Add "b" 2 }}{{ $scratch.Add "b" 2 }}{{ $scratch.Get "b" }}`, `4`},
+			},
+		)
+
 		ns.AddMethodMapping(ctx.Uniq,
 			[]string{"uniq"},
 			[][2]string{

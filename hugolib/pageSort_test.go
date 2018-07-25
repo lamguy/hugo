@@ -15,7 +15,6 @@ package hugolib
 
 import (
 	"fmt"
-	"html/template"
 	"path/filepath"
 	"testing"
 	"time"
@@ -74,13 +73,13 @@ func TestSortByN(t *testing.T) {
 		assertFunc func(p Pages) bool
 	}{
 		{(Pages).ByWeight, func(p Pages) bool { return p[0].Weight == 1 }},
-		{(Pages).ByTitle, func(p Pages) bool { return p[0].Title == "ab" }},
+		{(Pages).ByTitle, func(p Pages) bool { return p[0].title == "ab" }},
 		{(Pages).ByLinkTitle, func(p Pages) bool { return p[0].LinkTitle() == "abl" }},
 		{(Pages).ByDate, func(p Pages) bool { return p[0].Date == d4 }},
 		{(Pages).ByPublishDate, func(p Pages) bool { return p[0].PublishDate == d4 }},
 		{(Pages).ByExpiryDate, func(p Pages) bool { return p[0].ExpiryDate == d4 }},
 		{(Pages).ByLastmod, func(p Pages) bool { return p[1].Lastmod == d3 }},
-		{(Pages).ByLength, func(p Pages) bool { return p[0].Content == "b_content" }},
+		{(Pages).ByLength, func(p Pages) bool { return p[0].content() == "b_content" }},
 	} {
 		setSortVals([4]time.Time{d1, d2, d3, d4}, [4]string{"b", "ab", "cde", "fg"}, [4]int{0, 3, 2, 1}, p)
 
@@ -115,7 +114,7 @@ func TestPageSortReverse(t *testing.T) {
 	assert.Equal(t, 9, p2[0].fuzzyWordCount)
 	assert.Equal(t, 0, p2[9].fuzzyWordCount)
 	// cached
-	assert.True(t, probablyEqualPages(p2, p1.Reverse()))
+	assert.True(t, fastEqualPages(p2, p1.Reverse()))
 }
 
 func TestPageSortByParam(t *testing.T) {
@@ -124,7 +123,7 @@ func TestPageSortByParam(t *testing.T) {
 	s := newTestSite(t)
 
 	unsorted := createSortTestPages(s, 10)
-	delete(unsorted[9].Params, "arbitrarily")
+	delete(unsorted[9].params, "arbitrarily")
 
 	firstSetValue, _ := unsorted[0].Param(k)
 	secondSetValue, _ := unsorted[1].Param(k)
@@ -163,16 +162,21 @@ func setSortVals(dates [4]time.Time, titles [4]string, weights [4]int, pages Pag
 		pages[i].Date = dates[i]
 		pages[i].Lastmod = dates[i]
 		pages[i].Weight = weights[i]
-		pages[i].Title = titles[i]
+		pages[i].title = titles[i]
 		// make sure we compare apples and ... apples ...
-		pages[len(dates)-1-i].linkTitle = pages[i].Title + "l"
+		pages[len(dates)-1-i].linkTitle = pages[i].title + "l"
 		pages[len(dates)-1-i].PublishDate = dates[i]
 		pages[len(dates)-1-i].ExpiryDate = dates[i]
-		pages[len(dates)-1-i].Content = template.HTML(titles[i] + "_content")
+		pages[len(dates)-1-i].workContent = []byte(titles[i] + "_content")
 	}
 	lastLastMod := pages[2].Lastmod
 	pages[2].Lastmod = pages[1].Lastmod
 	pages[1].Lastmod = lastLastMod
+
+	for _, p := range pages {
+		p.resetContent()
+	}
+
 }
 
 func createSortTestPages(s *Site, num int) Pages {
@@ -180,7 +184,7 @@ func createSortTestPages(s *Site, num int) Pages {
 
 	for i := 0; i < num; i++ {
 		p := s.newPage(filepath.FromSlash(fmt.Sprintf("/x/y/p%d.md", i)))
-		p.Params = map[string]interface{}{
+		p.params = map[string]interface{}{
 			"arbitrarily": map[string]interface{}{
 				"nested": ("xyz" + fmt.Sprintf("%v", 100-i)),
 			},
